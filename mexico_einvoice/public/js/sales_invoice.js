@@ -45,32 +45,12 @@ frappe.ui.form.on('Sales Invoice', {
 });
 
 function download_e_invoice(e_invoice_id){
-    frappe.call({
-        method: "mexico_einvoice.utils.get_token",
-        args: {
-            e_invoice_id: e_invoice_id,
-        },
-        callback: function(r) {
-            if(r.message) {
-                const bearerToken = "Bearer "+r.message;
-                fetch("https://www.facturapi.io/v2/invoices/"+e_invoice_id+"/zip", {
-                headers: {
-                    "Authorization": bearerToken
-                }
-                })
-                .then(response => response.blob())
-                .then(blob => {
-                // Create a download link for the PDF file
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = e_invoice_id+".zip";
-                document.body.appendChild(a);
-                a.click();
-                a.remove();})
-            }
-        }
-    });
+    // Downloaded through the server so the Facturapi secret key never reaches the browser
+    const frm = cur_frm;
+    const url = "/api/method/mexico_einvoice.utils.download_einvoice"
+        + "?invoice_name=" + encodeURIComponent(frm.doc.name)
+        + "&e_invoice_id=" + encodeURIComponent(e_invoice_id);
+    window.open(url);
 }
 
 function getDialogCancel (frm) {

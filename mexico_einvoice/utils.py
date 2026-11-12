@@ -6,17 +6,56 @@ import requests
 from frappe import _
 
 
-@frappe.whitelist()
-def get_token():
+def get_token(company=None):
+    """Return the Facturapi secret key for a company.
+
+    Server-side only (not whitelisted): the key must never be sent to the browser.
+    Uses the company's row in Company Keys, falling back to the Default Secret Key.
+    """
+    from frappe.utils.password import get_decrypted_password
+
     e_invoice_setting = frappe.get_doc("E Invoice Setting", "E Invoice Setting")
+
+    if company:
+        for row in e_invoice_setting.company_keys or []:
+            if row.company == company:
+                return get_decrypted_password(row.doctype, row.name, "secret_key", raise_exception=False)
+
     token = e_invoice_setting.get_password(fieldname="secret_key", raise_exception=False)
+    if not token:
+        frappe.throw(
+            _("No Facturapi secret key configured for company {0}. Add it in E Invoice Setting.").format(
+                company or "-"
+            )
+        )
     return token
+
+
+@frappe.whitelist()
+def download_einvoice(invoice_name: str, e_invoice_id: str):
+    """Stream the stamped CFDI (XML + PDF zip) from Facturapi without exposing the key."""
+    si = frappe.get_doc("Sales Invoice", invoice_name)
+    si.check_permission("read")
+
+    allowed_ids = {si.e_invoice_id} | {row.id for row in si.get("e_invoice_payments") or []}
+    if e_invoice_id not in allowed_ids:
+        frappe.throw(_("This e-invoice does not belong to Sales Invoice {0}").format(invoice_name))
+
+    token = get_token(si.company)
+    url = f"https://www.facturapi.io/v2/invoices/{e_invoice_id}/zip"
+    response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
+    if response.status_code != 200:
+        frappe.throw(_("Could not download e-invoice from Facturapi"))
+
+    frappe.local.response.filename = f"{e_invoice_id}.zip"
+    frappe.local.response.filecontent = response.content
+    frappe.local.response.type = "download"
 
 
 def generate_einvoice(doc, method):
     e_invoice_setting = frappe.get_doc("E Invoice Setting", "E Invoice Setting")
     if e_invoice_setting.generate_e_invoice:
-        token = get_token()
+        token = get_token(doc.company)
         url = "https://www.facturapi.io/v2/invoices"
         header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         customer = get_customer_details(doc)
@@ -37,13 +76,14 @@ def generate_einvoice(doc, method):
         response = requests.post(url, headers=header, data=data)
         if response.status_code == 200:
             response = response.json()
-            doc.e_invoice_id = (response.get("id"),)
-            doc.uuid = (response.get("uuid"),)
-            doc.sat_signature = (response.get("sat_signature"),)
-            doc.signature = (response.get("stamp").get("signature"),)
-            doc.invoice_status = (response.get("status"),)
-            doc.sat_cert_number = (response.get("stamp").get("sat_cert_number"),)
-            doc.cfdi_version = (response.get("cfdi_version"),)
+            stamp = response.get("stamp") or {}
+            doc.e_invoice_id = response.get("id")
+            doc.uuid = response.get("uuid")
+            doc.sat_signature = stamp.get("sat_signature")
+            doc.signature = stamp.get("signature")
+            doc.invoice_status = response.get("status")
+            doc.sat_cert_number = stamp.get("sat_cert_number")
+            doc.cfdi_version = response.get("cfdi_version")
             doc.verification_url = response.get("verification_url")
 
             validate_partial_payment(doc, response)
@@ -124,9 +164,14 @@ def cancel_einvoice(
     e_invoice_id: str,
     motive: str,
 ):
+    si = frappe.get_doc("Sales Invoice", invoice_name)
+    si.check_permission("cancel")
+    if si.e_invoice_id != e_invoice_id:
+        frappe.throw(_("E-invoice ID does not match Sales Invoice {0}").format(invoice_name))
+
     e_invoice_setting = frappe.get_doc("E Invoice Setting", "E Invoice Setting")
     if e_invoice_setting.cancel_e_invoice:
-        token = get_token()
+        token = get_token(si.company)
         url = "https://www.facturapi.io/v2/invoices/" + e_invoice_id + "?motive=" + motive
         header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         response = requests.delete(url, headers=header)
@@ -182,7 +227,14 @@ def get_customer_from_payment(doc):
 
 
 def update_payment(doc, method):
-    if not doc.references:
+    # Only customer receipts that pay stamped Sales Invoices need a payment complement (REP)
+    if not doc.references or doc.party_type != "Customer" or doc.payment_type != "Receive":
+        return
+    if not any(
+        r.reference_doctype == "Sales Invoice"
+        and frappe.db.get_value("Sales Invoice", r.reference_name, "uuid")
+        for r in doc.references
+    ):
         return
 
     customer = get_customer_from_payment(doc)
@@ -192,13 +244,15 @@ def update_payment(doc, method):
     for rel_doc in doc.references:
         if rel_doc.reference_doctype == "Sales Invoice":
             uuid = frappe.get_value("Sales Invoice", rel_doc.reference_name, "uuid")
+            if not uuid:
+                continue
             installments = linked_sales_invoice(rel_doc.reference_name)
 
             # update taxes
             si_doc = frappe.get_doc("Sales Invoice", rel_doc.reference_name)
             taxes = []
-            if si_doc.taxes_and_charges:
-                for tax in doc.taxes:
+            if si_doc.taxes:
+                for tax in si_doc.taxes:
                     taxes.append(
                         {
                             "base": rel_doc.allocated_amount / (1 + (tax.rate / 100)),
@@ -229,7 +283,7 @@ def update_payment(doc, method):
 
     data = {"type": "P", "customer": customer, "complements": complements}
 
-    token = get_token()
+    token = get_token(doc.company)
     url = "https://www.facturapi.io/v2/invoices"
     header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -301,7 +355,7 @@ def update_partial_payment(doc, response):
     ]
     data = {"type": "P", "customer": customer, "complements": complements}
 
-    token = get_token()
+    token = get_token(doc.company)
     url = "https://www.facturapi.io/v2/invoices"
     header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 

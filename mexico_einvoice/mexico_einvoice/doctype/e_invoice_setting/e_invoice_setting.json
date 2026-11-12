@@ -8,6 +8,7 @@
  "engine": "InnoDB",
  "field_order": [
   "secret_key",
+  "company_keys",
   "generate_e_invoice",
   "cancel_e_invoice"
  ],
@@ -16,8 +17,16 @@
    "fieldname": "secret_key",
    "fieldtype": "Password",
    "in_list_view": 1,
-   "label": "Secret Key ",
-   "reqd": 1
+   "label": "Default Secret Key",
+   "reqd": 0,
+   "description": "Used for any company that has no row in Company Keys below"
+  },
+  {
+   "fieldname": "company_keys",
+   "fieldtype": "Table",
+   "label": "Company Keys",
+   "options": "E Invoice Company Key",
+   "description": "One Facturapi organization (secret key) per ERPNext company"
   },
   {
    "default": "1",
@@ -35,7 +44,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2023-05-11 07:11:58.620125",
+ "modified": "2026-11-12 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mexico Einvoice",
  "name": "E Invoice Setting",
