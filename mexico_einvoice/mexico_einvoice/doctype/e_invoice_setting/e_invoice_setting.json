@@ -19,14 +19,14 @@
    "in_list_view": 1,
    "label": "Default Secret Key",
    "reqd": 0,
-   "description": "Used for any company that has no row in Company Keys below"
+   "description": "Only used when Company Keys is empty (single company). If Company Keys has rows, only those companies are e-invoiced and this key is ignored."
   },
   {
    "fieldname": "company_keys",
    "fieldtype": "Table",
    "label": "Company Keys",
    "options": "E Invoice Company Key",
-   "description": "One Facturapi organization (secret key) per ERPNext company"
+   "description": "One Facturapi organization (secret key) per company. Companies not listed here are NOT e-invoiced (e.g. US entities)."
   },
   {
    "default": "1",
@@ -44,7 +44,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-12 12:00:00.000000",
+ "modified": "2026-11-12 20:05:00.000000",
  "modified_by": "Administrator",
  "module": "Mexico Einvoice",
  "name": "E Invoice Setting",

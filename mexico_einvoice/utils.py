@@ -6,22 +6,32 @@ import requests
 from frappe import _
 
 
-def get_token(company=None):
-    """Return the Facturapi secret key for a company.
+def get_company_token(company=None):
+    """Return the Facturapi secret key for a company, or None if it must not be stamped.
 
     Server-side only (not whitelisted): the key must never be sent to the browser.
-    Uses the company's row in Company Keys, falling back to the Default Secret Key.
+    - If Company Keys has rows, ONLY the companies listed there are e-invoiced;
+      any other company (e.g. a US entity) is skipped.
+    - If Company Keys is empty, the Default Secret Key is used for every company
+      (single-company setup).
     """
     from frappe.utils.password import get_decrypted_password
 
     e_invoice_setting = frappe.get_doc("E Invoice Setting", "E Invoice Setting")
+    company_keys = e_invoice_setting.company_keys or []
 
-    if company:
-        for row in e_invoice_setting.company_keys or []:
+    if company_keys:
+        for row in company_keys:
             if row.company == company:
                 return get_decrypted_password(row.doctype, row.name, "secret_key", raise_exception=False)
+        return None
 
-    token = e_invoice_setting.get_password(fieldname="secret_key", raise_exception=False)
+    return e_invoice_setting.get_password(fieldname="secret_key", raise_exception=False)
+
+
+def get_token(company=None):
+    """Like get_company_token, but raises when no key applies (download/cancel)."""
+    token = get_company_token(company)
     if not token:
         frappe.throw(
             _("No Facturapi secret key configured for company {0}. Add it in E Invoice Setting.").format(
@@ -55,7 +65,10 @@ def download_einvoice(invoice_name: str, e_invoice_id: str):
 def generate_einvoice(doc, method):
     e_invoice_setting = frappe.get_doc("E Invoice Setting", "E Invoice Setting")
     if e_invoice_setting.generate_e_invoice:
-        token = get_token(doc.company)
+        token = get_company_token(doc.company)
+        if not token:
+            # company is not set up for Facturapi (e.g. non-Mexican entity): no CFDI
+            return
         url = "https://www.facturapi.io/v2/invoices"
         header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         customer = get_customer_details(doc)
@@ -235,6 +248,9 @@ def update_payment(doc, method):
         and frappe.db.get_value("Sales Invoice", r.reference_name, "uuid")
         for r in doc.references
     ):
+        return
+
+    if not get_company_token(doc.company):
         return
 
     customer = get_customer_from_payment(doc)
