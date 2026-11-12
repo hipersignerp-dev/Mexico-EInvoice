@@ -150,9 +150,15 @@ def get_items(doc):
             item_tax_doc = frappe.get_doc("Item Tax Template", item.item_tax_template)
             for tax in item_tax_doc.taxes:
                 taxes.append({"type": tax.maxico_tax_type, "rate": tax.tax_rate / 100})
-        elif doc.taxes_and_charges:
-            item_tax_doc = frappe.get_doc("Sales Taxes and Charges Template", doc.taxes_and_charges)
-            for tax in item_tax_doc.taxes:
+        else:
+            # use the tax rows actually on the invoice (template or typed by hand)
+            for tax in doc.taxes or []:
+                if not tax.rate:
+                    continue
+                if not tax.mexico_tax_type:
+                    frappe.throw(
+                        _("Row {0} in Sales Taxes and Charges needs a Mexico Tax Type before the CFDI can be stamped.").format(tax.idx)
+                    )
                 taxes.append({"type": tax.mexico_tax_type, "rate": tax.rate / 100})
 
         items.append(
