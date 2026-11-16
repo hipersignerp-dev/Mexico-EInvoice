@@ -21,6 +21,11 @@ frappe.ui.form.on('Sales Invoice', {
         });
     },
     before_cancel: function(frm){
+        // Only invoices with a live CFDI need a SAT motive; others cancel normally
+        const status = (frm.doc.invoice_status || '').toLowerCase();
+        if (!frm.doc.e_invoice_id || status === 'canceled' || status === 'cancelled') {
+            return;
+        }
         dialog_cancel.show();
         frappe.validated = false;
     },

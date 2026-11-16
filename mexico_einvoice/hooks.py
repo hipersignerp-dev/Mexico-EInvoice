@@ -111,7 +111,10 @@ doctype_js = {
 # Hook on document methods and events
 
 doc_events = {
-    "Sales Invoice": {"before_submit": "mexico_einvoice.utils.generate_einvoice"},
+    "Sales Invoice": {
+        "before_submit": "mexico_einvoice.utils.generate_einvoice",
+        "on_cancel": "mexico_einvoice.utils.cancel_einvoice_on_cancel",
+    },
     "Payment Entry": {"before_submit": "mexico_einvoice.utils.update_payment"},
 }
 

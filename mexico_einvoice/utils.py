@@ -188,37 +188,72 @@ def cancel_einvoice(
     if si.e_invoice_id != e_invoice_id:
         frappe.throw(_("E-invoice ID does not match Sales Invoice {0}").format(invoice_name))
 
+    # The on_cancel hook (cancel_einvoice_on_cancel) does the Facturapi call,
+    # using the motive picked in the dialog.
+    si.flags.einvoice_motive = motive
+    si.cancel()
+    return "success"
+
+
+CANCEL_MOTIVES = {
+    "01": "01 - Receipt issued with errors related to.",
+    "02": "02 - Receipt issued with unrelated errors.",
+    "03": "03 - The operation was not carried out.",
+    "04": "04 - Nominative operation related to the global invoice.",
+}
+DEFAULT_CANCEL_MOTIVE = "02"
+
+
+def cancel_einvoice_on_cancel(doc, method=None):
+    """on_cancel hook: cancel the CFDI at SAT (via Facturapi) for every
+    cancellation path - form, API, bulk or script - so the ERP and SAT
+    never disagree. Runs last, after ERPNext's own cancel checks; if
+    Facturapi refuses, the throw rolls the whole ERP cancel back."""
+    if not doc.get("e_invoice_id"):
+        return
+    if (doc.get("invoice_status") or "").lower() in ("canceled", "cancelled"):
+        return
+
     e_invoice_setting = frappe.get_doc("E Invoice Setting", "E Invoice Setting")
-    if e_invoice_setting.cancel_e_invoice:
-        token = get_token(si.company)
-        url = "https://www.facturapi.io/v2/invoices/" + e_invoice_id + "?motive=" + motive
-        header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        response = requests.delete(url, headers=header)
-        if response.status_code == 200:
-            doc = frappe.get_doc("Sales Invoice", invoice_name)
-            doc.cancel()
-            response = response.json()
+    if not e_invoice_setting.cancel_e_invoice:
+        return
 
-            # set reason
-            if motive == "01":
-                reason = "01 - Receipt issued with errors related to."
-            elif motive == "02":
-                reason = "02 - Receipt issued with unrelated errors."
-            elif motive == "03":
-                reason = "03 - The operation was not carried out."
-            elif motive == "04":
-                reason = "04 - Nominative operation related to the global invoice."
-
-            frappe.db.set_value(
-                "Sales Invoice",
-                invoice_name,
-                {"invoice_status": response.get("status"), "motive": reason},
+    token = get_company_token(doc.company)
+    if not token:
+        frappe.throw(
+            _("Sales Invoice {0} has a CFDI (UUID {1}) but no Facturapi key is configured for company {2}, so it cannot be cancelled at SAT.").format(
+                doc.name, doc.get("uuid"), doc.company
             )
-            # frappe.db.commit()
-            return "success"
-        else:
-            response = response.json()
-            return "fail"
+        )
+
+    motive = doc.flags.get("einvoice_motive") or DEFAULT_CANCEL_MOTIVE
+    if motive not in CANCEL_MOTIVES:
+        frappe.throw(_("Invalid cancellation motive {0}").format(motive))
+
+    url = "https://www.facturapi.io/v2/invoices/" + doc.e_invoice_id + "?motive=" + motive
+    header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    response = requests.delete(url, headers=header, timeout=60)
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+
+    if response.status_code != 200:
+        frappe.throw(
+            _("Facturapi could not cancel the CFDI for {0}: {1}").format(
+                doc.name, data.get("message") or response.text[:300]
+            )
+        )
+
+    doc.db_set(
+        {"invoice_status": data.get("status") or "canceled", "motive": CANCEL_MOTIVES[motive]},
+        update_modified=False,
+    )
+    if data.get("cancellation_status") == "pending":
+        frappe.msgprint(
+            _("Cancellation sent to SAT; the receiver must accept it before it is final."),
+            indicator="orange",
+        )
 
 
 def get_customer_from_payment(doc):
