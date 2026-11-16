@@ -42,8 +42,10 @@ def get_token(company=None):
 
 
 @frappe.whitelist()
-def download_einvoice(invoice_name: str, e_invoice_id: str):
-    """Stream the stamped CFDI (XML + PDF zip) from Facturapi without exposing the key."""
+def download_einvoice(invoice_name: str, e_invoice_id: str, file_format: str = "zip"):
+    """Download the stamped CFDI as xml, pdf or zip without exposing the Facturapi key."""
+    from mexico_einvoice.cfdi import _fetch
+
     si = frappe.get_doc("Sales Invoice", invoice_name)
     si.check_permission("read")
 
@@ -51,14 +53,12 @@ def download_einvoice(invoice_name: str, e_invoice_id: str):
     if e_invoice_id not in allowed_ids:
         frappe.throw(_("This e-invoice does not belong to Sales Invoice {0}").format(invoice_name))
 
-    token = get_token(si.company)
-    url = f"https://www.facturapi.io/v2/invoices/{e_invoice_id}/zip"
-    response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    if response.status_code != 200:
-        frappe.throw(_("Could not download e-invoice from Facturapi"))
+    file_format = (file_format or "zip").lower()
+    content = _fetch(si.company, e_invoice_id, file_format)
 
-    frappe.local.response.filename = f"{e_invoice_id}.zip"
-    frappe.local.response.filecontent = response.content
+    label = invoice_name if e_invoice_id == si.e_invoice_id else f"{invoice_name}-REP-{e_invoice_id[-6:]}"
+    frappe.local.response.filename = f"{label}.{file_format}"
+    frappe.local.response.filecontent = content
     frappe.local.response.type = "download"
 
 
@@ -74,16 +74,16 @@ def generate_einvoice(doc, method):
         customer = get_customer_details(doc)
         items = get_items(doc)
 
+        from mexico_einvoice.cfdi import get_cfdi_options
+
+        use, payment_form, payment_method = get_cfdi_options(doc)
         data = {
             "customer": customer,
             "items": items,
-            "use": "G01",
-            "payment_form": "99",
-            "payment_method": "PPD",
+            "use": use,
+            "payment_form": payment_form,
+            "payment_method": payment_method,
         }
-
-        # validate advance payment
-        validate_advance_payment(data, doc)
 
         data = json.dumps(data)
         response = requests.post(url, headers=header, data=data)
@@ -99,15 +99,14 @@ def generate_einvoice(doc, method):
             doc.cfdi_version = response.get("cfdi_version")
             doc.verification_url = response.get("verification_url")
 
+            from mexico_einvoice.cfdi import enqueue_attach
+
+            enqueue_attach("Sales Invoice", doc.name, doc.company, doc.e_invoice_id)
+
             validate_partial_payment(doc, response)
         else:
             response = response.json()
             frappe.throw(_(response.get("message")))
-
-
-def validate_advance_payment(data, doc):
-    if doc.outstanding_amount == 0:
-        data.update({"payment_form": "30", "payment_method": "PUE"})
 
 
 def validate_partial_payment(doc, response):
@@ -349,6 +348,10 @@ def update_payment(doc, method):
     if response.status_code == 200:
         response = response.json()
 
+        from mexico_einvoice.cfdi import enqueue_attach
+
+        enqueue_attach("Payment Entry", doc.name, doc.company, response.get("id"), f"{doc.name}-REP")
+
         # updating invoice payments
         for ref in doc.references:
             if ref.reference_doctype == "Sales Invoice":
@@ -423,6 +426,10 @@ def update_partial_payment(doc, response):
 
         # update E-Invoice Payments
         update_einvoice_payments(doc, response)
+
+        from mexico_einvoice.cfdi import enqueue_attach
+
+        enqueue_attach("Sales Invoice", doc.name, doc.company, response.get("id"), f"{doc.name}-REP-anticipo")
     else:
         response = response.json()
         frappe.throw(_(response.get("message")))

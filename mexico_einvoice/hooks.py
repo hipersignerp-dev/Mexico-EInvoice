@@ -8,6 +8,8 @@ app_license = "MIT"
 # Includes in <head>
 # ------------------
 
+after_migrate = ["mexico_einvoice.cfdi.setup"]
+
 fixtures = [
     "Tax Type",
     "Tax System",
@@ -112,7 +114,10 @@ doctype_js = {
 
 doc_events = {
     "Sales Invoice": {
-        "before_validate": "mexico_einvoice.company_taxes.align_taxes_with_company",
+        "before_validate": [
+            "mexico_einvoice.company_taxes.align_taxes_with_company",
+            "mexico_einvoice.cfdi.set_cfdi_defaults",
+        ],
         "before_submit": "mexico_einvoice.utils.generate_einvoice",
         "on_cancel": "mexico_einvoice.utils.cancel_einvoice_on_cancel",
     },

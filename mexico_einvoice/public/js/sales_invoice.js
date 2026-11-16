@@ -4,10 +4,20 @@ frappe.ui.form.on('Sales Invoice', {
 	refresh: function(frm) {
         dialog_cancel = new frappe.ui.Dialog(getDialogCancel(frm));
 
-		if (frm.doc.docstatus == 1 && frm.doc.e_invoice_id) {
-            frm.add_custom_button(__('Download E-Invoice'), function() {
-                download_e_invoice(frm.doc.e_invoice_id)
-            })
+		if (frm.doc.docstatus >= 1 && frm.doc.e_invoice_id) {
+            ['xml', 'pdf', 'zip'].forEach(function(fmt) {
+                frm.add_custom_button(fmt.toUpperCase(), function() {
+                    download_e_invoice(frm.doc.e_invoice_id, fmt);
+                }, __('Descargar CFDI'));
+            });
+            frm.add_custom_button(__('Adjuntar XML y PDF'), function() {
+                frappe.call({
+                    method: 'mexico_einvoice.cfdi.attach_now',
+                    args: {doctype: frm.doctype, name: frm.doc.name},
+                    freeze: true,
+                    callback: function() { frm.reload_doc(); }
+                });
+            }, __('Descargar CFDI'));
             // remove action buttons from child table
             $('.grid-buttons').remove()
         }
@@ -49,12 +59,13 @@ frappe.ui.form.on('Sales Invoice', {
 	}
 });
 
-function download_e_invoice(e_invoice_id){
+function download_e_invoice(e_invoice_id, fmt){
     // Downloaded through the server so the Facturapi secret key never reaches the browser
     const frm = cur_frm;
     const url = "/api/method/mexico_einvoice.utils.download_einvoice"
         + "?invoice_name=" + encodeURIComponent(frm.doc.name)
-        + "&e_invoice_id=" + encodeURIComponent(e_invoice_id);
+        + "&e_invoice_id=" + encodeURIComponent(e_invoice_id)
+        + "&file_format=" + encodeURIComponent(fmt || 'zip');
     window.open(url);
 }
 
