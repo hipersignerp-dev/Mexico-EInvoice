@@ -112,10 +112,14 @@ doctype_js = {
 
 doc_events = {
     "Sales Invoice": {
+        "before_validate": "mexico_einvoice.company_taxes.align_taxes_with_company",
         "before_submit": "mexico_einvoice.utils.generate_einvoice",
         "on_cancel": "mexico_einvoice.utils.cancel_einvoice_on_cancel",
     },
     "Payment Entry": {"before_submit": "mexico_einvoice.utils.update_payment"},
+    "Quotation": {"before_validate": "mexico_einvoice.company_taxes.align_taxes_with_company"},
+    "Sales Order": {"before_validate": "mexico_einvoice.company_taxes.align_taxes_with_company"},
+    "Delivery Note": {"before_validate": "mexico_einvoice.company_taxes.align_taxes_with_company"},
 }
 
 # Scheduled Tasks
